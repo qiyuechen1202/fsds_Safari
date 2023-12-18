@@ -103,6 +103,9 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import re
+import numpy as np
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
 ```
 
 ```{python}
@@ -161,12 +164,10 @@ padir = 'data/'
 # Load Airbnb listings
 url = 'http://data.insideairbnb.com/united-kingdom/england/london/2022-12-10/data/listings.csv.gz'
 ls_total = pd.read_csv(cache_data(url, padir),compression='gzip')
+
+# read the selected variables
 ls = pd.read_csv(cache_data(url, padir),compression='gzip',usecols=['id','latitude','longitude','price','minimum_nights'])
 ls['price'] = ls['price'].str.replace('$','', regex=False).str.replace(',','', regex=False).astype(float)
-```
-
-```{python}
-ls_na.shape
 ```
 
 ```{python}
@@ -216,12 +217,12 @@ A parenthetical citation: There are many ways to research Airbnb [see, for examp
 :::
 
 ```{python}
-print(f"Data frame is {df.shape[0]:,} x {df.shape[1]:,}")
+# print(f"Data frame is {df.shape[0]:,} x {df.shape[1]:,}")
 ```
 
 ```{python}
-ax = df.host_listings_count.plot.hist(bins=50);
-ax.set_xlim([0,500]);
+# ax = df.host_listings_count.plot.hist(bins=50);
+# ax.set_xlim([0,500]);
 ```
 
 ## 3. How was the data collected?  
@@ -256,6 +257,114 @@ ax.set_xlim([0,500]);
 
 :::
 
+```{python}
+# calculate the total numebr of Airbnb listings
+ls_total.shape
+```
+
+####### In 2022, there were 71938 airbnb listings. 
+
+Based on their location, the airbnb listings are summarised by each borough. In the airbnb dataset, the average house price, Airbnb density and short term percentage will be analysed to understand the situation of airbnb in London.
+
+### Processing the Airbnb Data into Boroughs
+
+### 1. Spatial Join
+
+```{python}
+# spatial join based on the borough boundaries and point locations
+borls = gpd.sjoin(gls,boros, how='left', op='within')
+```
+
+### 2. Calculate the Variable for each Boroughs
+
+```{python}
+# select the short term listings and assign the new value
+borls['s_rent'] = borls['minimum_nights'].apply(lambda x: 1 if x <= 28 else 0)
+
+# summaries the data by groupby
+borls_new = borls.groupby(['index_right','HECTARES']).agg({
+    'price': 'mean',
+    's_rent': 'sum',
+    'index_right': 'count'
+}).rename(columns={'index_right': 'num_listings',
+                  'price': 'average_price'}).reset_index()
+
+# calculate the variable (density and short-term precenatage)
+borls_new ['density'] = borls_new ['num_listings']/ borls_new ['HECTARES']
+borls_new ['shortterm'] = borls_new ['s_rent']/borls_new ['num_listings']
+
+borls_new.set_index('index_right',inplace=True)
+```
+
+```{python}
+# select the variable: average price, density and short-term percentage
+l = ['average_price','num_listings','density','shortterm']
+for i in l:
+    boros[i]= borls_new [i]
+```
+
+```{python}
+columns = boros.loc[ : ,['average_price','density','shortterm']]
+# plot the map
+fig, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(2, 3, figsize=(15, 8))
+ax1.boxplot(columns['density'])
+ax1.set_title('(a) Listings Density Boxplot')
+ax2.boxplot(columns['average_price'])
+ax2.set_title('(b) Average Price Boxplot')
+ax3.boxplot(columns['shortterm'])
+ax3.set_title('(c) Short-term Percentage Boxplot')
+
+boros.plot(ax=ax4, column='density', legend=True, markersize=10) 
+ax4.set_title('(d) Listings Density')
+boros.plot(ax=ax5, column='average_price', legend=True, markersize=10)
+ax5.set_title('(e) Average Price')
+boros.plot(ax=ax6, column='shortterm', legend=True, markersize=10,cmap='viridis')
+ax6.set_title('(f) Short term Precentage')
+fig.suptitle('Figure 1 : The characteristics of Airbnb listings', fontsize=20, y=1.02)
+plt.tight_layout()
+```
+
+```{python}
+# look at the distribution of data
+for c in columns:
+    # calculate mean
+    mean_value = boros[c].mean()
+    # calculate max
+    max_value = boros[c].max()
+    # calculate min
+    min_value = boros[c].min()
+    # caculate median
+    median_value = boros[c].median() 
+    # calculate 25% quantile 
+    q25 = boros[c].quantile(0.25)
+    # calculate 75% quantile 
+    q75 = boros[c].quantile(0.75) 
+
+    # print the results
+    print(f"Column: {c}")
+    print(f"Mean: {mean_value:.2f}")
+    print(f"max: {max_value:.2f}")
+    print(f"min: {min_value:.2f}")
+    print(f"Median: {median_value:.2f}")
+    print(f"25th Percentile: {q25:.2f}")
+    print(f"75th Percentile: {q75:.2f}")
+    print("\n")
+```
+
+### Results: 
+Figure 1 shows the characteristics of Airbnb listings summarised by each borough. Overall, the distribution of Airbnb listings in London demonstrates obvious differences between the central and other areas. 
+
+#### 1.The listing density by borough
+
+The density of listings for each borough is calculated by the number of listings and the areas. The mean density in London is 0.91. As shown in Figure 1 (a), the median is closer to the 25th percentile, indicating a relatively low density in most boroughs. Besides, there are two highest values, which are 3.87 in Kensington and Chelsea and 3.54 in Westminster. The spatial distribution of density (Figure 1 (d)) indicates that the overall density decreases as the distance from the centre increases. 
+
+#### 2.The airbnb average price by borough
+
+Average Airbnb prices across boroughs range from 90 to 318, with a median average price of 153. Regarding distribution,   Airbnb prices show a gradually decreasing trend from the central area to the outer areas (Figure 1 (e)). Notably,  Kensington and Chelsea indicate the highest average Airbnb price, 318.22.
+
+#### 3.The short-term percentage by borough
+
+According to the regulations, the minimum stay of short-term rentals does not exceed 28 days. Airbnb listings are classified into long-term and short-term rentals, and the proportion of short-term rentals in each borough is calculated. It can be seen that Airbnb in London is still mainly for short-term rentals, accounting for 97% of the total. It is worth noting that central London reflects a relatively small proportion of short-term rentals.
 
 ## 7. Drawing on your previous answers, and supporting your response with evidence (e.g. figures, maps, and statistical analysis/models), how *could* this data set be used to inform the regulation of Short-Term Lets (STL) in London? 
 
@@ -265,16 +374,370 @@ ax.set_xlim([0,500]);
 
 :::
 
-```{python}
-# calculate the total numebr of Airbnb listings
-ls_total.shape
-```
-
-```{python}
-ls.shape
-```
-
 ## 7.1 Literature review
+
+## 7.2 Gentrification Indicators
+
+According to the literature review, the gentrification process can be measured from changes in population, ethic group, housing price, and deprivation. There are four indicators to identify the change, namely population churn, the change of no-white group proportion, the change of sale housing price and the change of deprivation degrees.
+
+### 7.2.1 Loading the Datasets of Gentrification Indicators
+
+#### (a) Population Churn (Migration)
+
+```{python}
+# 2011 data
+popch11_url = f'https://raw.githubusercontent.com/JunruHuang/Safari_data/main/popchurn 11.csv'
+popch2011 = pd.read_csv(cache_data(popch11_url, padir), skiprows=7, skip_blank_lines=True, usecols=[
+    'local authority: district / unitary (prior to April 2015)',
+    'mnemonic',
+    'Whole household lived at same address one year ago', 
+    'Wholly moving household: Total']).dropna(how='all').iloc[:33]
+
+# 2021 data
+popch21in_url = f'https://raw.githubusercontent.com/JunruHuang/Safari_data/main/MIG009EW_LTLA_IN.csv'
+popch21out_url = f'https://raw.githubusercontent.com/JunruHuang/Safari_data/main/MIG009EW_LTLA_OUT.csv'
+popch2021_in_raw = pd.read_csv(cache_data(popch21in_url, padir), usecols=['Lower tier local authorities code', 'Household migration LTLA (inflow) (7 categories) code', 'Count'])
+popch2021_out_raw = pd.read_csv(cache_data(popch21out_url, padir), usecols=['Migrant LTLA one year ago code', 'Household migration LTLA (outflow) (3 categories) code', 'Count'])
+
+popch2021_in = popch2021_in_raw.loc[popch2021_in_raw['Lower tier local authorities code'].astype(str).str.match(r'^E090000[0-9]{2}$|^E09000[1-3][0-3]$', na=False)]
+popch2021_out = popch2021_out_raw.loc[popch2021_out_raw['Migrant LTLA one year ago code'].astype(str).str.match(r'^E090000[0-9]{2}$|^E09000[1-3][0-3]$', na=False)]
+
+## establish the dataframe and select the data 2021 based on the definition
+popch2021 = pd.DataFrame()
+popch2021['samead_2021'] = popch2021_in.loc[popch2021_in['Household migration LTLA (inflow) (7 categories) code'] == 1].groupby('Lower tier local authorities code')['Count'].sum()
+popch2021['movein_2021']= popch2021_in.loc[(popch2021_in['Household migration LTLA (inflow) (7 categories) code'] >= 2) & (popch2021_in['Household migration LTLA (inflow) (7 categories) code'] <= 5)].groupby('Lower tier local authorities code')['Count'].sum()
+popch2021['moveout_2021'] = popch2021_out.loc[(popch2021_out['Household migration LTLA (outflow) (3 categories) code'] >= 1) & (popch2021_out['Household migration LTLA (outflow) (3 categories) code'] <= 2)].groupby('Migrant LTLA one year ago code')['Count'].sum()
+```
+
+#### (b) Non-white Ethnic Group Proportion Change
+
+```{python}
+#data,2011 and 2021
+eg11_url = f'https://raw.githubusercontent.com/JunruHuang/Safari_data/main/ethnic group 2011.csv'
+eg21_url = f'https://raw.githubusercontent.com/JunruHuang/Safari_data/main/ethnic group 2021.csv'
+eg2011 = pd.read_csv(cache_data(eg11_url, padir), skiprows=7, header=0, skip_blank_lines=True, usecols=[
+    'mnemonic','All categories: Ethnic group','White'])
+eg2021 = pd.read_csv(cache_data(eg21_url, padir), skiprows=6, header=0, skip_blank_lines=True, usecols=[
+    'mnemonic','Total: All usual residents','White'])
+
+# select data by borough code, 2011 and 2021
+eg2011 = eg2011[eg2011['mnemonic'].astype(str).str.startswith('E09')]
+eg2021 = eg2021[eg2021['mnemonic'].astype(str).str.startswith('E09')]
+# set the borough code as index
+eg2011.set_index('mnemonic', inplace=True)
+eg2021.set_index('mnemonic', inplace=True)
+```
+
+#### (c) Housing Price Change(Median/Average) 
+
+```{python}
+# median housing price,2011 and 2021
+price_med_url = f'https://raw.githubusercontent.com/JunruHuang/Safari_data/main/house price_median.xls'
+price_med_raw = pd.read_excel(cache_data(price_med_url, padir),sheet_name='1a',engine='xlrd',skiprows=5,header=0,usecols=[
+    'Local authority code','Year ending Dec 2001','Year ending Dec 2021'])
+price_med = price_med_raw.loc[price_med_raw['Local authority code'].astype(str).str.contains(r'^E09', regex=True)]
+
+#set the index
+price_med.set_index('Local authority code', inplace=True)
+
+# establish housing median datafame of 2011 and 2021
+Housing_med_df = pd.DataFrame()
+Housing_med_df ['median_2011'] =price_med.loc[:, ['Year ending Dec 2001']]
+Housing_med_df['median_2021'] =price_med.loc[:, ['Year ending Dec 2021']]
+Housing_med_df = Housing_med_df.groupby('Local authority code')[['median_2011', 'median_2021']].median()
+```
+
+```{python}
+# average housing price,2011 and 2021 
+housing_price_url = f'https://raw.githubusercontent.com/JunruHuang/Safari_data/main/house price_aver.xlsx'
+housing_df = pd.read_excel(cache_data(housing_price_url, padir),sheet_name=2,skiprows=1, header=0,index_col=0)
+
+# set the index to datetime data
+housing_df.index = pd.to_datetime(housing_df.index, format='%Y%m%d')
+
+# set the column and index name
+housing_df.columns.name = 'London_borough'
+housing_df.index.name = 'year'
+
+# check the index(year) type
+print(housing_df.index.dtype)
+
+# select the london borough data
+London_housing_df = housing_df.filter(regex='^E09', axis=1)
+
+# change the column and index location 
+London_housing_df = London_housing_df.transpose()
+
+# check the data
+London_housing_df.head(3) 
+
+# select the data of 2011 and 2021
+housing_ave_df = pd.DataFrame()
+housing_ave_df ['average_2011'] =London_housing_df.loc[:, ['2011-12-01']]
+housing_ave_df ['average_2021'] =London_housing_df.loc[:, ['2012-12-01']]
+# look at the data 
+housing_ave_df.head(2)
+```
+
+#### (d) Deprivation Proportion Change
+
+```{python}
+# load the data 2011
+dpr11_url = f'https://raw.githubusercontent.com/JunruHuang/Safari_data/main/Deprivation 2011.xls'
+dpr2011_raw = pd.read_excel(cache_data(dpr11_url, padir),sheet_name='QS119EW_Percentages',engine='xlrd',skiprows=10,header=0, usecols=[
+    'Area code','Household is not deprived in any dimension'])
+dpr2011 = dpr2011_raw.loc[dpr2011_raw['Area code'].astype(str).str.contains(r'^E090000[0-2][0-9]$|^E090003[0-3]$|^E090000[1-9][0-9]$|^E09000[1-3][0-3]$'
+, regex=True)]
+
+# load the data 2021
+dpr21_url = f'https://raw.githubusercontent.com/JunruHuang/Safari_data/main/Deprivation 2021.csv'
+dpr2021_raw = pd.read_csv(cache_data(dpr21_url, padir))
+dpr2021 = dpr2021_raw[dpr2021_raw['Upper tier local authorities Code'].astype(str).str.contains(
+    r'^E090000[0-2][0-9]$|^E090003[0-3]$|^E090000[1-9][0-9]$|^E09000[1-3][0-3]$', regex=True)]
+```
+
+### 7.2.2 Calculating the Gentrificaton Indicators
+
+```{python}
+# establish the new dataframe gtr
+```
+
+```{python}
+gtr = pd.DataFrame()
+```
+
+#### (a) Population Churn (Migration)
+
+```{python}
+## 2011 migrantion (household level)
+popch2011['2011migration'] = (
+    (popch2011['Wholly moving household: Total'] /
+    (popch2011['Wholly moving household: Total'] + popch2011['Whole household lived at same address one year ago'])))
+
+gtr['borough'] = popch2011['local authority: district / unitary (prior to April 2015)']
+gtr['borough code'] = popch2011['mnemonic'].astype(str)
+gtr['2011migration'] = popch2011['2011migration']
+gtr.set_index('borough code', inplace=True)
+```
+
+```{python}
+## 2021 migrantion (household level)
+popch2021['2021migration'] = (popch2021['movein_2021'] + 
+                              popch2021['moveout_2021'])/ (popch2021['samead_2021'] + 
+ popch2021['movein_2021'] + popch2021['moveout_2021'])
+# Merge the result of population churn into gtr based on 'borough code' and 'code'
+gtr ['2021migration']= popch2021['2021migration']
+# add 'popchurn' column: 
+gtr['popchurn'] = gtr['2021migration'] - gtr['2011migration']
+```
+
+#### (b) Non-white Ethnic Group Proportion Change
+
+```{python}
+# Calculate the no-white ratio for 2011
+eg2011['nw_ratio11'] = (1 - eg2011['White'] / eg2011['All categories: Ethnic group'])
+# Calculate the no-white ratio for 2021
+eg2021['nw_ratio21'] = (1 - eg2021['White'] / eg2021['Total: All usual residents'])
+```
+
+```{python}
+# links the no-white ratio to gtr dataframe
+gtr ['nw_ratio11'] = eg2011['nw_ratio11']
+gtr ['nw_ratio21']= eg2021['nw_ratio21'] 
+# add 'ethnic group change' column
+gtr['ethgr'] = (gtr['nw_ratio21'] - gtr['nw_ratio11'])/ eg2011['nw_ratio11']
+```
+
+#### (c) Housing Price Change(Median/Average) 
+
+```{python}
+# link the median data and average data
+total_housing_df = pd.merge(housing_ave_df,Housing_med_df, left_index=True, right_index=True)
+# calculate the change of housing price
+total_housing_df['Housing_Compare_2011'] = total_housing_df['median_2011']/total_housing_df['average_2011']
+total_housing_df['Housing_Compare_2021'] = total_housing_df['median_2021']/total_housing_df['average_2021']
+total_housing_df['houseprice_change'] = (total_housing_df['Housing_Compare_2021']-total_housing_df['Housing_Compare_2011']) 
+
+# link the housing data set to grf
+gtr = pd.merge(gtr, total_housing_df[['Housing_Compare_2011','Housing_Compare_2021','houseprice_change']], left_index=True, right_index=True)
+```
+
+#### (d)  Deprivation Proportion Change
+
+```{python}
+# select the 2021 data by the definition of index
+dpr2021_nodpr = dpr2021[dpr2021['Household deprivation (6 categories) Code'] == 1]
+dpr2021_all = dpr2021[(dpr2021['Household deprivation (6 categories) Code'] >= 1) & (dpr2021['Household deprivation (6 categories) Code'] <= 5)]
+sum = dpr2021_all.groupby('Upper tier local authorities Code')['Observation'].sum()
+
+ratios = 100 - (dpr2021_nodpr.groupby('Upper tier local authorities Code')['Observation'].sum() / sum)*100 
+
+# Create a new DataFrame by merging 'dpr2011' and 'ratios'
+Dep_result_df = pd.merge(dpr2011, ratios, left_on='Area code', right_index=True, how='left')
+Dep_result_df = Dep_result_df.rename(columns={'Observation': 'dpr2021%',
+                                      'Household is not deprived in any dimension': 'dpr2011%'})
+Dep_result_df.set_index('Area code', inplace=True)
+```
+
+```{python}
+# links the deprivation index to gtr dataset
+gtr['dpr2011%']= 100- Dep_result_df['dpr2011%']
+gtr['dpr2021%']= Dep_result_df['dpr2021%']
+gtr['dpr'] = (gtr['dpr2021%'] - gtr['dpr2011%'])/gtr['dpr2011%']
+```
+
+#### (e) The Final Output
+
+```{python}
+# check the final result of gtr dataframe
+gtr.head(2)
+```
+
+#### (f) Save borough & listings to local
+
+```{python}
+# borough.gpkg: multipolygon of boroughs with 1) columns gentrification score & 2)statistics of airbnb data
+boros_path = padir+'boro_new.gpkg'
+if not os.path.exists(boros_path):
+    print('Saving boroughs_new...')
+    boros.to_file(boros_path, layer='merged_layer', driver='GPKG')
+
+# boro_ls.gpkg: point of 1) Airbnb listings & 2) gentrification score
+borolist_path = padir+'borough_list.gpkg'
+if not os.path.exists(borolist_path):
+    print('Saving boroughlist...')
+    borls.to_file(borolist_path, layer='merged_layer', driver='GPKG')
+```
+
+### 7.3 Data Analysis
+
+
+#### 7.3.1 Load Data
+
+```{python}
+# borough.gpkg: multipolygon of boroughs with 1) columns gentrification score & 2)statistics of airbnb data
+boros = gpd.read_file(padir+'boro_new.gpkg')
+borolist = gpd.read_file(padir+'borough_list.gpkg')
+```
+
+```{python}
+# set the borough code as index
+boros.set_index('GSS_CODE', inplace =True)
+```
+
+#### 7.3.2 Links the gentrification indicators and Airbnb Dataset
+
+```{python}
+# copy gtr dataframe to new dataframe
+gtr_slr = gtr.copy()
+```
+
+```{python}
+# create a new daraframe and links the gentrification indicators and airbnb dataset
+slr = pd.merge(gtr_slr,boros, left_index=True, right_index=True)
+
+slr = pd.DataFrame(slr.drop('geometry', axis=1))
+
+# check the dataset
+slr['popchurn'] = slr['popchurn'].astype(float)
+slr['ethgr'] = slr['ethgr'].astype(float)
+slr['houseprice_change'] = slr['houseprice_change'].astype(float)
+slr['dpr'] = slr['dpr'].astype(float)
+slr['density'] = slr['density'].astype(float)
+slr['average_price'] = slr['average_price'].astype(float)
+slr['shortterm'] = slr['shortterm'].astype(float)
+```
+
+#### 7.3.2 Simple Linear Regression Analysis
+
+```{python}
+# Assuming df_office is your DataFrame
+y_vars=['popchurn', 'ethgr', 'houseprice_change', 'dpr']
+x_vars=['density', 'average_price','shortterm']
+
+fig, axes = plt.subplots(nrows=len(y_vars), ncols=len(x_vars), figsize=(12, 12))
+
+for i, y_var in enumerate(y_vars):
+    for j, x_var in enumerate(x_vars):
+        ax = axes[i, j]
+        
+        # Scatter plot
+        sns.scatterplot(x=x_var, y=y_var, data=slr, ax=ax)
+        
+        # Linear regression
+        formula = f"{y_var} ~ {x_var}"
+        model = smf.ols(formula, data=slr).fit()
+        beta_0, beta_1 = model.params
+        X = slr[x_var]
+        ax.plot(X, X * beta_1 + beta_0, 'r')
+        
+        # Add labels and title
+        ax.set_xlabel(x_var)
+        ax.set_ylabel(y_var)
+        ax.set_title(f'{y_var} vs {x_var}\n$y = {round(beta_1, 3)}x + {round(beta_0, 3)}$\n$R^2 = {round(model.rsquared, 3)}$\n$P ={round(model.pvalues[x_var], 3)}$')
+
+plt.tight_layout()
+plt.show()
+```
+
+#### （a) Density
+
+```{python}
+density_population = smf.ols(formula='density ~ popchurn',data=slr).fit()
+
+# And this gives a big summary of the results:
+print(density_population.summary())
+```
+
+```{python}
+density_housingprice = smf.ols(formula='density ~ houseprice_change',data=slr).fit()
+
+# And this gives a big summary of the results:
+print(density_housingprice.summary())
+```
+
+```{python}
+density_dpr = smf.ols(formula='density ~ dpr',data=slr).fit()
+
+# And this gives a big summary of the results:
+print(density_dpr.summary())
+```
+
+#####
+
+In this  section, we examined 
+
+#### （b)Average price
+
+```{python}
+shortterm_change = smf.ols(formula='shortterm ~ houseprice_change',data=slr).fit()
+
+# And this gives a big summary of the results:
+print(Averageprice_houseprice_change.summary())
+```
+
+```{python}
+Averageprice_houseprice_dpr = smf.ols(formula='average_price ~ dpr',data=slr).fit()
+
+# And this gives a big summary of the results:
+print(Averageprice_houseprice_dpr.summary())
+```
+
+#### (c) short-term Percentage
+
+```{python}
+shortterm_population = smf.ols(formula='shortterm ~ popchurn',data=slr).fit()
+
+# And this gives a big summary of the results:
+print(shortterm_population.summary())
+```
+
+```{python}
+shortterm_dpr = smf.ols(formula='shortterm ~ dpr',data=slr).fit()
+
+# And this gives a big summary of the results:
+print(shortterm_dpr.summary())
+```
 
 ## Sustainable Authorship Tools
 
